@@ -1,16 +1,10 @@
-use inc::Module::Install;
 
-name 'AnyEvent-Semaphore';
+use ExtUtils::MakeMaker;
 
-all_from 'lib/AnyEvent/Semaphore.pm';
-
-build_requires 'Coro'       => '4.45';
-build_requires 'Test::More' => '0.72';
-
-requires 'AnyEvent'     => '2.9';
-requires 'Scope::Guard' => '0.03';
-
-auto_install;
-
-WriteAll;
-
+WriteMakefile( NAME          => 'AnyEvent::Semaphore',
+               VERSION_FROM  => 'lib/AnyEvent/Semaphore.pm',
+               PREREQ_PM     => { AnyEvent => '6.01',
+                                  Method::WeakCallback => '0.03' },
+               ABSTRACT_FROM => 'lib/AnyEvent/Semaphore.pm',
+               AUTHOR        => 'Salvador Fandino <sfandino@yahoo.com>'
+);

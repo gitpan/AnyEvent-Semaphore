@@ -1,22 +1,23 @@
---- 
-abstract: AnyEvent based semaphores
-author: 
-  - Anders Nor Berle <berle@cpan.org>
-build_requires: 
-  Coro: 4.45
-  Test::More: 0.72
-distribution_type: module
-generated_by: Module::Install version 0.68
-license: perl
-meta-spec: 
-  url: http://module-build.sourceforge.net/META-spec-v1.3.html
-  version: 1.3
-name: AnyEvent-Semaphore
-no_index: 
-  directory: 
-    - inc
-    - t
-requires: 
-  AnyEvent: 2.9
-  Scope::Guard: 0.03
-version: 0.00_01
+--- #YAML:1.0
+name:               AnyEvent-Semaphore
+version:            0.01
+abstract:           Semaphore implementation for AnyEvent
+author:
+    - Salvador Fandino <sfandino@yahoo.com>
+license:            unknown
+distribution_type:  module
+configure_requires:
+    ExtUtils::MakeMaker:  0
+build_requires:
+    ExtUtils::MakeMaker:  0
+requires:
+    AnyEvent:             6.01
+    Method::WeakCallback:  0.03
+no_index:
+    directory:
+        - t
+        - inc
+generated_by:       ExtUtils::MakeMaker version 6.57_05
+meta-spec:
+    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
+    version:  1.4

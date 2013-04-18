@@ -1,159 +1,174 @@
 package AnyEvent::Semaphore;
 
-use AnyEvent;
-use Scope::Guard;
+our $VERSION = '0.01';
 
 use strict;
 use warnings;
 
-our $VERSION = '0.00_01';
+use AE;
+use Scalar::Util ();
+use Method::WeakCallback qw(weak_method_callback);
+
+# internal representation of watcher is an array [$semaphore, $cb]
 
 sub new {
-  my ($class,$count) = @_;
-
-  my $self = bless {},$class;
-
-  $self->{count} = $count || 1;
-
-  $self->{queue} = [];
-
-  return $self;
+    my ($class, $size) = @_;
+    my $sem = { size => $size || 1,
+                holes => 0,
+                running => 0,
+                watchers => [] };
+    $sem->{schedule_cb} = weak_method_callback($sem, '_schedule'),
+    bless $sem, $class;
 }
+
+sub size {
+    my $sem = shift;
+    if (@_) {
+        $sem->{size} = shift;
+        &AE::postpone($sem->{schedule_cb});
+    }
+    $sem->{size};
+}
+
+sub running { shift->{running} }
 
 sub down {
-  my ($self) = @_;
-
-  if ($self->{count} >= 1) {
-    $self->{count}--;
-  } else {
-    my $c = AnyEvent->condvar;
-
-    push @{ $self->{queue} } => $c;
-
-    $c->wait;
-  }
-
-  return;
+    return unless defined $_[1];
+    my ($sem) = @_;
+    my $watchers = $sem->{watchers};
+    my $w = [@_];
+    bless $w, 'AnyEvent::Semaphore::Watcher';
+    push @{$watchers}, $w;
+    Scalar::Util::weaken($watchers->[-1]);
+    &AE::postpone($sem->{schedule_cb});
+    $w;
 }
 
-sub up {
-  my ($self) = @_;
-
-  my $c = shift @{ $self->{queue} };
-
-  if ($c) {
-    $c->broadcast;
-  } else {
-    $self->{count}++;
-  }
-
-  return;
+sub _schedule {
+    my $sem = shift;
+    my $watchers = $sem->{watchers};
+    while ($sem->{size} > $sem->{running}) {
+        if (defined (my $w = shift @$watchers)) {
+            $sem->{running}++;
+            my ($cb, @args) = splice @$w, 1;
+            bless $w, 'AnyEvent::Semaphore::Down';
+            $cb->(@args);
+        }
+        else {
+            @$watchers or return;
+        }
+    }
 }
 
-sub count {
-  my ($self) = @_;
-
-  return $self->{count};
+sub AnyEvent::Semaphore::Watcher::DESTROY {
+    local ($!, $@, $SIG{__DIE__});
+    eval {
+        my $watcher = shift;
+        my $sem = $watcher->[0];
+        my $holes = ++$sem->{holes};
+        my $watchers = $sem->{watchers};
+        if ($holes > 100 and $holes * 2 > @$watchers) {
+            @{$sem->{watchers}} = grep defined, @$watchers;
+            Scalar::Util::weaken $_ for @$watchers;
+            $sem->{holes} = 0;
+        }
+    }
 }
 
-sub guard {
-  my ($self) = @_;
-
-  $self->down;
-
-  return Scope::Guard->new (sub { $self->up });
+sub AnyEvent::Semaphore::Down::DESTROY {
+    local ($!, $@, $SIG{__DIE__});
+    eval {
+        my $sem = shift->[0];
+        $sem->{running}--;
+        &AE::postpone($sem->{schedule_cb})
+    }
 }
 
 1;
 
-=pod
+__END__
+
 
 =head1 NAME
 
-AnyEvent::Semaphore - AnyEvent based semaphores
+AnyEvent::Semaphore - Semaphore implementation for AnyEvent
 
 =head1 SYNOPSIS
 
   use AnyEvent::Semaphore;
 
-  my $s = AnyEvent::Semaphore->new;
+  my $sem = AnyEvent::Semaphore->new(5);
+  ...
 
-  $s->down;
+  my $watcher = $sem->down( sub { ... } );
+  ...
 
-  # Do something fun
-  
-  $s->up;
+  undef $watcher; # semaphore up
+
+
 
 =head1 DESCRIPTION
 
-This module is an AnyEvent based implementation of counting semaphores
-and is very similar to L<Coro::Semaphore> in the way it works.
+This module provides a semaphore implementation intended to be used
+with the L<AnyEvent> framework.
 
-It implements the following methods
+It tries to be as simple as possible and to follow AnyEvent style.
 
-=over 4
+=head2 API
 
-=item new ($count?)
-
-Creates  the semaphore, with  the $count argument being optional. If a
-$count is  specified, this is the number  of slots the  semaphore will
-have. If not specified, it defaults to 1.
-
-=item down
-
-Decreases the semaphore count  by one. If the count is zero, this will
-cause the method to block until a slot opens up in the semaphore.
-
-=item up
-
-Increases the semaphore count by one. If the slot count was zero, this
-will wake up one blocker that was waiting for the semaphore.
-
-=item count
-
-Returns the current semaphore count.
-
-=item guard
-
-Calling this method will down the semaphore (And will  obviously block
-if neccesary) and  return a  guard object. If this  guard object is in
-some way destroyed, the semaphore is upped.
-
-=back
-
-=head1 ACKNOWLEDGEMENTS
+The module provides the following methods:
 
 =over 4
 
-=item Marc Lehmann for writing L<AnyEvent>.
+=item $sem = AnyEvent::Semaphore->new($size);
+
+Creates a new semaphore object of the given size.
+
+=item $watcher = $sem->down($callback)
+
+Queues a down (or wait) operation on the semaphore. The given callback
+will be eventually invoked when the resouce guarded by the semaphore
+becomes free.
+
+The call returns a watcher object.
+
+After the resource is assigned and the callback invoked, destroying
+the watcher frees the resource (it is the equivalent of the up or
+signal operation).
+
+Destroying the watcher before the resource is asigned just cancels the
+down operation.
+
+=item $new_size = $sem->size($size)
+
+=item $new_size = $sem->size
+
+Gets or sets the semaphore size.
+
+When the size is increased, queued operations will be processed.
+
+=item $n = $sem->running
+
+Returns the number of slots currently used.
 
 =back
 
 =head1 SEE ALSO
 
-=over 4
+The Wikipedia page on L<semaphores|http://en.wikipedia.org/wiki/Semaphore_%28programming%29>.
 
-=item L<AnyEvent>
-
-=item L<Coro>
-
-=back
-
-=head1 BUGS
-
-Most software has bugs. This module probably isn't an exception. 
-If you find a bug please either email me, or add the bug to cpan-RT.
+L<AnyEvent>.
 
 =head1 AUTHOR
 
-Anders Nor Berle E<lt>berle@cpan.orgE<gt>
+Salvador FandiE<ntilde>o, E<lt>sfandino@yahoo.comE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2008 by Anders Nor Berle.
+Copyright (C) 2013 by Qindel FormaciE<oacute>n y Servicios S.L.
 
 This library is free software; you can redistribute it and/or modify
-it under the same terms as Perl itself. 
+it under the same terms as Perl itself, either Perl version 5.14.2 or,
+at your option, any later version of Perl 5 you may have available.
 
 =cut
-
